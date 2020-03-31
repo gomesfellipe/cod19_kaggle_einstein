@@ -3,6 +3,7 @@
 .Rapp.history
 .DS_Store
 report.Rmd
+report.html
 
 # Session Data files
 .RData

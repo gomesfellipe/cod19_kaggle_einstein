@@ -1,0 +1,392 @@
+---
+title: "report2"
+author: "MTBR - ModelThinkingBR"
+date: "3/30/2020"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(purrr)
+library(stringr)
+library(reactable)
+library(DataExplorer)
+library(readxl)
+library(dplyr)
+library(rsample)
+library(recipes)
+library(caret)
+library(doParallel)
+library(DMwR) # SMOTE
+
+
+reactable2 <- function(x, ...){
+  
+  x <- x %>% 
+    mutate_if(is.numeric, ~format(.x, digits = 4,decimal.mark = ","))
+  
+  reactable(x, filterable = F, sortable = T, pagination = FALSE,
+            highlight = TRUE, outlined = TRUE, ...) 
+}
+```
+
+
+```{r}
+dataset <- read_excel("Dataset.xlsx") 
+```
+
+```{r, eval = F}
+visdat::vis_dat(dataset)
+```
+
+```{r}
+# Converter o nome das colunas e converter tudas categoricas para character -----
+dataset <- 
+  dataset %>% 
+  mutate_if(is.factor, as.character) %>% 
+  janitor::clean_names() %>% 
+  select(-one_of("patient_id"))
+
+# Remover variaveis target da outra tarefa -----
+dataset <- 
+  dataset %>% 
+  select(-one_of('patient_addmited_to_regular_ward_1_yes_0_no',
+                 'patient_addmited_to_semi_intensive_unit_1_yes_0_no',
+                 'patient_addmited_to_intensive_care_unit_1_yes_0_no'))
+
+# Remover colunas onde todas as linhas sao vazias -----
+# Ninguem fez o exame
+all_row_na <- 
+  dataset %>% 
+  select_if(~sum(is.na(.x)) == nrow(dataset)) %>% 
+  colnames()
+
+dataset <- dataset %>% select(-one_of(all_row_na))
+
+# Remover linhas onde todas as colunas sao vazias -----
+# O individuo nao fez nenhum exame
+all_cols_na <- 
+  dataset %>% 
+  select_if(~! sum(!is.na(.x)) == nrow(dataset)) %>% 
+  { apply(., 1, function(x){sum(is.na(x))}) != ncol(.) } %>% 
+  which()
+dataset <- dataset %>% slice(all_cols_na)
+
+# Converter para numerico -----
+dataset <- dataset %>%
+  mutate_at('urine_p_h', ~as.numeric(ifelse(.x == "Não Realizado", NA, .x)))
+
+# Converter para categorico ordinal -----
+urine_leuk_levels <- 
+  table(dataset$urine_leukocytes) %>% names() %>% 
+  str_replace("<1000", "0") %>% as.numeric() %>% sort()
+
+dataset <- dataset %>% 
+  mutate(urine_leukocytes = str_replace(urine_leukocytes, "<1000", "0") %>% 
+           as.factor() %>% ordered(levels = urine_leuk_levels) %>% as.numeric())
+
+# Converter "nao realizado" para NA -----
+dataset <- 
+  dataset %>% 
+  mutate_at(c('strepto_a',
+              'urine_esterase', 
+              'urine_hemoglobin',
+              'urine_bile_pigments',
+              'urine_ketone_bodies',
+              'urine_protein'),
+            ~ ifelse(.x == 'not_done', NA, .x))
+
+# Criar Dummies para valores únicos (Nao sei se concordo) -----
+# to_dumie <- dataset %>% 
+#   select_if(~!is.numeric(.x)) %>% mutate_all(as.factor) %>% map_lgl(~length(levels(.x))==1) %>% 
+#   which() %>% names()
+
+# Converter logico para numerico -----
+dataset <- dataset %>% mutate_if(is.logical, as.numeric) 
+
+# Remover variaveis numericas com cardinalidade menor do que 10 -----
+num_card_mq10 <- 
+  which( dataset %>% select_if(is.numeric) %>% map_dbl(~length(unique(.x))) < 10) %>% 
+  names()
+dataset <- dataset %>% select(-one_of(num_card_mq10))
+
+# Nao substituir numericos faltantes por 0 pois estes valores possuem significado
+
+# Arrumar categorias com cardinalidade 1 -----
+dataset <- dataset %>% 
+  mutate(urine_crystals = if_else(urine_crystals != "Ausentes", "other", "Ausentes")) 
+
+dataset <- dataset %>% 
+  mutate(urine_aspect = if_else(urine_aspect != "clear", "other", "clear")) 
+
+dataset <- dataset %>% 
+  mutate(urine_color = if_else(urine_color != "light_yellow", "other", "light_yellow")) 
+
+dataset <- dataset %>% mutate_if(is.character, as.factor)
+
+# Remover categoria com 1 nivel -----
+cat_um_nv <- 
+  dataset %>% 
+  select_if(~!is.numeric(.x)) %>%
+  map_lgl(~length(levels(.x)) == 1) %>% which() %>% 
+  names()
+
+dataset <- dataset %>% select(-one_of(cat_um_nv))
+
+# dataset <- dataset %>% 
+#   mutate(sars_cov_2_exam_result = if_else(sars_cov_2_exam_result == "positive", 1, 0) %>% 
+#            as.factor())
+
+# conferirir: inf_a_h1n1_2009 e influenza_b
+```
+
+```{r ,eval = F}
+visdat::vis_dat(dataset)
+```
+
+Criar bases de treino e teste
+
+```{r}
+
+set.seed(1)
+dataset_initial_split  <- initial_split(dataset, strata = sars_cov_2_exam_result,
+                                        prop = 0.9)
+
+recipe_ini <- 
+  recipe(sars_cov_2_exam_result ~ ., data = training(dataset_initial_split)) %>%
+  step_YeoJohnson(all_numeric()) %>% 
+  step_nzv(-all_outcomes()) 
+
+recipe_knn <- 
+  recipe_ini %>%
+  step_knnimpute(all_predictors(), neighbors = 3) 
+
+train_ini <- bake(prep(recipe_ini), training(dataset_initial_split))
+train_knn <- bake(prep(recipe_knn), training(dataset_initial_split))
+
+train_ini_down <- 
+  downSample(y = train_ini %>% pull(sars_cov_2_exam_result),
+             x = train_ini %>% select(-sars_cov_2_exam_result)) %>% 
+  as_tibble()
+
+train_knn_down <- 
+  downSample(y = train_knn %>% pull(sars_cov_2_exam_result),
+             x = train_knn %>% select(-sars_cov_2_exam_result),
+             yname = "sars_cov_2_exam_result") %>% 
+  as_tibble()
+
+train_ini_smote <- 
+  SMOTE(sars_cov_2_exam_result ~ ., data  = as.data.frame(train_ini)) %>% 
+  as_tibble()
+
+train_knn_smote <- 
+  SMOTE(sars_cov_2_exam_result ~ ., data  = as.data.frame(train_knn)) %>% 
+  as_tibble()
+
+
+test_ini <- bake(prep(recipe_ini), testing(dataset_initial_split))
+test_knn <- bake(prep(recipe_knn), testing(dataset_initial_split))
+
+
+```
+
+Treinar modelos RFE
+
+```{r}
+set.seed(10)
+
+ctrl <- rfeControl(method = "repeatedcv",
+                   number = 5,
+                   repeats = 4,
+                   verbose = T,
+                   functions = treebagFuncs)
+
+custom_rfe <- function(x){
+  rfe(x %>% select(-sars_cov_2_exam_result),
+      x %>% pull(sars_cov_2_exam_result),
+      sizes = c(5, 7, 10, 15, 20, 25),
+      rfeControl = ctrl,
+      na.action = na.pass)
+}
+
+results_rfe <- 
+  map(list(train_ini, train_ini_down, train_ini_smote,
+           train_knn, train_knn_down, train_knn_smote),
+      ~ custom_rfe(.x)) 
+
+rfe_selected <- predictors(lmProfile) 
+
+ggplot(lmProfile) 
+
+
+train <- train %>% select_at(c('sars_cov_2_exam_result', rfe_selected))
+
+rfRFE <-  list(summary = defaultSummary,
+               fit = function(x, y, first, last, ...){
+                 library(randomForest)
+                 randomForest(x, y, importance = first, ...)
+                 },
+               pred = function(object, x)  predict(object, x),
+               rank = function(object, x, y) {
+                 vimp <- varImp(object)
+                 vimp <- vimp[order(vimp$Overall,decreasing = TRUE),,drop = FALSE]
+                 vimp$var <- rownames(vimp)                  
+                 vimp
+                 },
+               selectSize = pickSizeBest,
+               selectVar = pickVars)
+
+rfRFE$summary
+rfRFE$fit
+rfRFE$pred
+rfRFE$rank(lmProfile)
+confusionMatrix(lmProfile, norm = "none")
+
+confusionMatrix(
+  predict(lmProfile, newdata = testing(dataset_initial_split)) %>% pull(pred),
+  testing(dataset_initial_split) %>% pull(sars_cov_2_exam_result)
+)
+
+
+```
+
+
+```{r}
+cl <- makeCluster(parallel::detectCores(), outfile="")
+registerDoParallel(cl)
+# stopCluster(cl)
+
+ctrl <- trainControl(method = "repeatedcv",
+                     number = 5,
+                     repeats = 4,
+                     summaryFunction = twoClassSummary, # AUC
+                     classProbs = TRUE,
+                     verboseIter = T)
+
+xgboost_params <- parameters(min_n(), tree_depth(), learn_rate(), eta())
+
+xgboost_grid <- grid_max_entropy(xgboost_params, size = 30)
+
+model <- train(sars_cov_2_exam_result ~ .,
+               train,
+               method = 'xgbTree',
+               tuneLength = 10,
+               # tuneGrid = grid,
+               parms=list(split='information'),
+               trControl = ctrl,
+               metric = "ROC",
+               na.action = na.pass)
+
+confusionMatrix(model, norm = "none")
+plot(model)
+varImp(model)
+
+predict(model$finalModel,newdata = testing(dataset_initial_split))
+
+ROCR::plot()
+rattle::fancyRpartPlot(model$finalModel, cex = 0.7) 
+```
+
+
+```{r, eval = F}
+library(tidymodels)
+
+train_pp <- bake(preprocessing_recipe, training(dataset_initial_split))
+
+set.seed(123)
+car_cv_folds <-
+  training(dataset_initial_split) %>% 
+    bake(preprocessing_recipe, new_data = .) %>%
+    vfold_cv(v = 5)
+
+car_cv_folds
+
+
+xgboost_model <- boost_tree(
+        mode       = "classification", 
+        trees      = 100, 
+        min_n      = tune(), 
+        tree_depth = tune(), 
+        learn_rate = tune()
+    ) %>%
+    set_engine("xgboost")
+
+xgboost_params <- parameters(min_n(), tree_depth(), learn_rate())
+
+xgboost_grid <- grid_max_entropy(xgboost_params, size = 30)
+
+
+xgboost_stage_1_cv_results_tbl <- tune_grid(
+    formula   = sars_cov_2_exam_result ~ .,
+    model     = xgboost_model,
+    resamples = car_cv_folds,
+    grid      = xgboost_grid,
+    metrics   = metric_set(accuracy, roc_auc, sens, spec),
+    control   = control_grid(verbose = TRUE)
+)
+
+# xgboost_stage_1_cv_results_tbl %>% show_best("accuracy", n = 10, maximize = FALSE)
+
+params_xgboost_best <- xgboost_stage_1_cv_results_tbl %>% 
+    select_best("accuracy", maximize = FALSE)
+
+
+xgboost_stage_2_model <- xgboost_model %>% 
+    finalize_model(params_xgboost_best)
+
+model_final <- xgboost_stage_2_model %>%
+    fit(sars_cov_2_exam_result ~ . , 
+        data = bake(preprocessing_recipe, new_data = car_prices_tbl))
+
+calc_test_metrics <- function(formula, model_spec, recipe, split) {
+    
+    train_processed <- training(split) %>% bake(recipe, new_data = .)
+    test_processed  <- testing(split) %>% bake(recipe, new_data = .)
+    
+    target_expr <- recipe %>% 
+        pluck("last_term_info") %>%
+        filter(role == "outcome") %>%
+        pull(variable) %>%
+        sym()
+    
+    model_spec %>%
+        fit(formula = as.formula(formula), 
+            data    = train_processed) %>%
+        predict(new_data = test_processed) %>%
+        bind_cols(testing(split)) %>%
+        metrics(!! target_expr, .pred)
+}
+
+xgboost_stage_2_metrics <- calc_test_metrics(
+    formula    = sars_cov_2_exam_result ~ .,
+    model_spec = xgboost_stage_2_model,
+    recipe     = preprocessing_recipe,
+    split      = dataset_initial_split 
+)
+xgboost_stage_2_metrics
+```
+
+
+```{r}
+
+recipe(sars_cov_2_exam_result ~.,data = dataset) %>% 
+  
+
+```
+
+
+
+
+```{r}
+visdat::vis_dat(dataset)
+```
+
+
+
+
+
+
+
+
