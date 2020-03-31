@@ -6,10 +6,13 @@ Este repositório foi criado para organizar os códigos, análises e referencias
 
 Autores e participantes do projeto:
 
-  * [Fellipe Gomes](github.com/gomesfellipe) (Estatístico) 
+  * [Fellipe Gomes](https://github.com/gomesfellipe) (Estatístico) 
   * [João Pedro Medeiros](http://lattes.cnpq.br/2533554356367029) (Estudante de Medicina)
 
 **Atenção**: Toda a documentação abaixo foi obtida e trduzida livremente da descriçã do Dataset no Kaggle: <https://www.kaggle.com/einsteindata4u/covid19>
+
+Submissão Task 1: <...>
+Submissão Task 2: <...>
 
 # Backgroud
 
