@@ -9,14 +9,14 @@ Autores e participantes do projeto:
   * [Fellipe Gomes](https://github.com/gomesfellipe) (Estatístico) 
   * [João Pedro Medeiros](http://lattes.cnpq.br/2533554356367029) (Estudante de Medicina)
 
-**Atenção**: Toda a documentação abaixo foi obtida e trduzida livremente da descriçã do Dataset no Kaggle: <https://www.kaggle.com/einsteindata4u/covid19>
+**Atenção**: Toda a documentação abaixo foi obtida e traduzida livremente da descrição do Dataset no Kaggle: <https://www.kaggle.com/einsteindata4u/covid19>
 
 Submissões:
 
   * Submissão Task 1: <https://www.kaggle.com/gomes555/task1-covid-19-diagnosis>
   * Submissão Task 2: <https://www.kaggle.com/gomes555/task2-covid-19-admission-ac-94-sens-0-92-auc-0-96>
 
-# Backgroud
+# Background
 
 A Organização Mundial da Saúde (OMS) caracterizou o COVID-19, causado pela SARS-CoV-2, como uma pandemia em 11 de março, enquanto o aumento exponencial no número de casos estava em risco de sobrecarregar os sistemas de saúde em todo o mundo com uma demanda. para leitos de UTI muito acima da capacidade existente, com regiões da Itália sendo exemplos proeminentes.
 
