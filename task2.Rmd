@@ -1,0 +1,574 @@
+---
+title: "Kaggle Dataset: Diagnosis of COVID-19 and its clinical spectrum"
+subtitle: "AI and Data Science supporting clinical decisions (from 28th Mar to 1st Apr)"
+date: "3/30/2020"
+output: html_document
+---
+
+Autores e participantes do projeto:
+
+  * [Fellipe Gomes](https://github.com/gomesfellipe) (Estatístico - UFF, Cientista de Dados - FGV IBRE) 
+  * [João Pedro Medeiros](http://lattes.cnpq.br/2533554356367029) (Estudante de Medicina - UFJF)
+
+
+# Definição do Problema
+
+Dataset do Kaggle: <https://www.kaggle.com/einsteindata4u/covid19>, maiores informações sobre o dataset e o desafio [neste link](https://www.kaggle.com/einsteindata4u/covid19) da competição ou [neste link](https://github.com/gomesfellipe/cod19_kaggle_einstein) do repositório deste projeto no github.
+
+## Descrição
+
+A descrição completa do problema pode ser obtida no repositório oficial do projeto. A finalidade deste repositório é resolver a [Task 2](https://www.kaggle.com/einsteindata4u/covid19/tasks?taskId=646) proposta para este dataset, que consistem em: 
+
+*Com base nos resultados dos exames laboratoriais comumente coletados entre os casos confirmados de COVID-19 durante uma visita ao pronto-socorro, seria possível prever quais pacientes precisarão ser internados em uma enfermaria geral, unidade semi-intensiva ou unidade de terapia intensiva?*
+
+## Objetivo
+
+O objetivo final deste projeto será: Prever se os casos confirmados de COVID-19 serão internados.
+
+Para resolver o objetivo deste projeto duas abordagens seriam possíveis para resolver este desafio, são elas:
+
+  1. Criar um modelo heurístico utilizando regras pré-estabelecidas por médicos e especialistas da área da saúde;
+  2. Treinar um modelo estatístico que forma que a importância de cada atributo seja obtida de forma automática através de aplicações de metodologias apropriadas. 
+  
+Devido ao curto período de tempo dedicado à construção das regras do modelo, utilizaremos a abordagem (2.) para automatizar esta tarefa.
+
+## Premissas
+
+Antes da manipulação dos dados, realizou-se uma revisão da literatura em conjunto com um graduando da área da saúde para ver o que já foi elucidado e pós essa revisão, algumas das premissas consideradas para a construção do modelo:
+
+  * Não ter os dados de sintomas pode tornar a tarefa mais difícil, já que os muitos parâmetros dados podem ter alterações inespecíficas, ou seja, essas podem ter como causa diversas origens tanto internas quanto externas.
+  * Todos os exames positivos pra outros microrganismos são critérios importantes para diagnostico (por que se a pessoa esta com influenza positivo, por exemplo, provavelmente não deve ter o corona vírus positivo a não ser que a pessoa tenha os dois. No caso de ter os dois, isso pode ser importante pra ver quem precisaria de uti);
+  * O paciente é encaminhado ou para regular ward ou para semi-intensive unit ou para intensive care unit pois verificou-se na base de dados que em casos positivos para SARS-Cov-2, os pacientes são encaminhados uma única vez;
+  * O nível de açúcar no sangue (glicemia) é um importante fator para a pessoa ir para a uti mas não é importante para o diagnostico já que a glicemia meio é um fator importante para o diagnóstico da diabetes. Contudo somente a glicemia não diagnóstica a diabetes, sendo assim necessários outros dados como o nível de hemoglobina glicada;
+  * Diabetes é um fator de risco, pois pacientes diabéticos descompensados possuem alta glicemia e processos inflamatórios crônicos, que dificultam a ação do sistema imune. Além disso, diabéticos parecem ter níveis receptores de angiotensina II regulados de forma a facilitar a entrada no vírus nas células (Fato que ainda deve ser estudado e elucidado) ;
+  * Valores dos exames foram normalizados para que a média fosse zero.
+
+## Dados fornecidos
+
+Os dados fornecidos parecem ser de exames específicos de microrganismos, exame de sangue e exame urina. É importante levar em consideração que nem todos os dados serão úteis para cada desafio. 
+
+Carregar pacotes, dados e funções auxiliares:
+
+```{r, echo = TRUE, message=FALSE, warning=FALSE, result=FALSE, cache=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE, result=FALSE, cache=FALSE)
+
+library(visdat)  #kaggle error
+library(funModeling) # kaggle error
+library(janitor)      # clean_names
+library(ggplot2)      # graficos
+library(readxl)       # leitura da base
+library(dplyr)        # manipulacao 
+library(purrr)        # programacao funcional
+library(stringr)      # manipular strings
+library(rsample)      # amostragem
+library(recipes)      # pre processing
+library(caret)        # machine learning
+library(DataExplorer) # rapida analise exploratoria
+library(knitr)        # print tables
+library(kableExtra)   # print tables
+library(doParallel)   # parallel computing
+library(DMwR)         # SMOTE
+library(plotROC)      # plot ROC
+library(pROC)         # plot ROC
+
+theme_set(theme_bw()) # Ttema ggplo
+# Definir clusters
+cl <- makeCluster(8, outfile="")
+registerDoParallel(cl)
+# stopCluster(cl)
+
+dataset <- read_excel("dataset.xlsx") 
+
+dataset <-
+  dataset %>%
+  clean_names() %>% 
+  rowwise() %>%
+  mutate( patient_addmited_to_all = sum(
+    patient_addmited_to_regular_ward_1_yes_0_no,
+    patient_addmited_to_semi_intensive_unit_1_yes_0_no,
+    patient_addmited_to_intensive_care_unit_1_yes_0_no
+  )) %>%
+  ungroup() %>% 
+  mutate(patient_addmited_to_all = if_else(patient_addmited_to_all == 1, 
+                                           "positive", "negative")) %>% 
+  filter(sars_cov_2_exam_result == "positive") %>% 
+  select(-one_of(c('sars_cov_2_exam_result',
+                   'patient_addmited_to_regular_ward_1_yes_0_no',
+                   'patient_addmited_to_semi_intensive_unit_1_yes_0_no',
+                   'patient_addmited_to_intensive_care_unit_1_yes_0_no')))
+```
+
+# Resumo e analise dos dados
+
+Nesta seção  será realizada a análise exploratória da estrutura dos dados bem como desenvolver uma função para tratamento da base antes de usar como input de modelos
+
+## Estrutura dos dados
+
+Primeiramente veja a estrutura dos dados:
+
+```{r}
+plot_intro(dataset)
+```
+
+Existe uma grande quantidade de dados faltantes (incluindo colunas completamente vazias) e isso é uma característica que influenciará diretamente na escolha do modelo adotado.
+
+Veja um outro panorama geral dos dados:
+
+```{r, eval = T}
+visdat::vis_dat(dataset) # problema no kaggle
+```
+
+Note que existe forte presença de dados faltantes (missing data) em todos os atributos, além de algumas variáveis categóricas que estão no formato `character` e uma coluna contém dados do tipo lógico. Essas colunas serão tratadas.
+
+A tabela abaixo apresenta as quantidades e porcentagens de dados faltantes e zeros no dataset:
+
+```{r, eval = T}
+# problema no kaggle
+dataset %>% 
+  funModeling::df_status(print_results = F) %>% 
+  arrange(-p_zeros) %>% 
+  kable() %>%
+  kable_styling() %>%
+  scroll_box(width = "500px", height = "200px")
+```
+
+## Visualizações
+
+Após obter a análise geral dos dados, será utilizado o pacote `DataExplorer` para se obter um resumo rápido mais detalhado dos dados disponíveis antes de qualquer tratamento dos dados:
+
+```{r, eval = F}
+# criar relatorio rapido
+create_report(janitor::clean_names(dataset), y = 'patient_addmited_to_all', 
+              output_file = "report2.html") 
+```
+
+Este relatório pode ser lido [neste link](https://github.com/gomesfellipe/cod19_kaggle_einstein/blob/master/report.html)
+
+## Tratamento dos dados
+
+Antes de calcular estatísticas e ajustar modelos é necessário fazer um tratamento nos dados. Além de remover todas colunas e linhas 100\% vazias é necessário converter os dados corretamente para possibilitar as analises utilizando R.
+
+Embora [existam estudos que comentem](https://www.ajronline.org/doi/pdf/10.2214/AJR.20.22959) sobre o uso dos atributos *D-Dimer* e *Urine sugar* (que denota atividade renal/ diabetes) para caracterizar um caso de COVID-19, não utilizaremos pois não existem dados de treino disponíveis.
+
+Além disso, existem outros atributos numéricos que possuem mais de 90\% de dados faltantes porém será necessário cautela antes de aplicar qualquer método de imputação de dados pois, por exemplo, incluir o valor `0` nos leucócitos iria colocar aquele paciente como um leucopênico, como se ele nao tivesse leucócitos.
+
+Após a análise exploratória definiu-se os seguintes tratamentos dos dados:
+
+  * Padronizar o nome das colunas
+  * Converter todas categóricas para caractere
+  * Remover variáveis target da outra tarefa
+  * Remover colunas onde todas as linhas sao vazias
+  * Remover linhas onde todas as colunas sao vazias
+  * Converter para numérico
+  * Converter para categórico ordinal
+  * Converter "nao realizado" para NA
+  * Converter logico para numérico
+  * Remover variáveis numéricas com cardinalidade menor do que 10
+  * Arrumar categorias com cardinalidade 1
+  * Remover categoria com 1 nível
+
+Obs.: Não foram criadas variáveis Dummies pois incluiria viés em nosso dataset. Além disso os dados numéricos ausentes não foram substituídos por 0 pois indicaria que um paciente estaria com os parâmetros ok enquanto isso pode não ser verdade.
+
+```{r}
+treatment <- function(dataset){
+  
+  # Converter o nome das colunas e converter tudas categoricas para character
+dataset <- 
+  dataset %>% 
+  mutate_if(is.factor, as.character) %>% 
+  janitor::clean_names() %>% 
+  select(-one_of("patient_id"))
+
+# Remover colunas onde todas as linhas sao vazias -----
+# Ninguem fez o exame
+all_row_na <- 
+  dataset %>% 
+  select_if(~sum(is.na(.x)) == nrow(dataset)) %>% 
+  colnames()
+
+dataset <- dataset %>% select(-one_of(all_row_na))
+
+# Remover linhas onde todas as colunas sao vazias -----
+# O individuo nao fez nenhum exame
+all_cols_na <- 
+  dataset %>% 
+  select_if(~! sum(!is.na(.x)) == nrow(dataset)) %>% 
+  { apply(., 1, function(x){sum(is.na(x))}) != ncol(.) } %>% 
+  which()
+dataset <- dataset %>% slice(all_cols_na)
+
+# Converter para numerico -----
+dataset <- dataset %>%
+  mutate_at('urine_p_h', ~as.numeric(ifelse(.x == "Não Realizado", NA, .x)))
+
+# Converter para categorico ordinal -----
+urine_leuk_levels <- 
+  table(dataset$urine_leukocytes) %>% names() %>% 
+  str_replace("<1000", "0") %>% as.numeric() %>% sort()
+
+dataset <- dataset %>% 
+  mutate(urine_leukocytes = str_replace(urine_leukocytes, "<1000", "0") %>% 
+           as.factor() %>% ordered(levels = urine_leuk_levels) %>% as.numeric())
+
+# Converter "nao realizado" para NA -----
+dataset <- 
+  dataset %>% 
+  mutate_at(c('strepto_a',
+              'urine_esterase', 
+              'urine_hemoglobin',
+              'urine_bile_pigments',
+              'urine_ketone_bodies',
+              'urine_protein'),
+            ~ ifelse(.x == 'not_done', NA, .x))
+
+# Converter logico para numerico -----
+dataset <- dataset %>% mutate_if(is.logical, as.numeric) 
+
+# Remover variaveis numericas com cardinalidade menor do que 10 -----
+num_card_mq10 <- 
+  which( dataset %>% select_if(is.numeric) %>% map_dbl(~length(unique(.x))) < 10) %>% 
+  names()
+dataset <- dataset %>% select(-one_of(num_card_mq10))
+
+# Nao substituir numericos faltantes por 0 pois estes valores possuem significado
+
+# Arrumar categorias com cardinalidade 1 -----
+dataset <- dataset %>% 
+  mutate(urine_crystals = if_else(urine_crystals != "Ausentes", "other", "Ausentes")) 
+
+dataset <- dataset %>% 
+  mutate(urine_aspect = if_else(urine_aspect != "clear", "other", "clear")) 
+
+dataset <- dataset %>% 
+  mutate(urine_color = if_else(urine_color != "light_yellow", "other", "light_yellow")) 
+
+dataset <- dataset %>% mutate_if(is.character, as.factor)
+
+# Remover categoria com 1 nivel -----
+cat_um_nv <- 
+  dataset %>% 
+  select_if(~!is.numeric(.x)) %>%
+  map_lgl(~length(levels(.x)) == 1) %>% which() %>% 
+  names()
+
+dataset <- dataset %>% select(-one_of(cat_um_nv))
+
+# todo: conferir inf_a_h1n1_2009 e influenza_b
+
+return(dataset)
+  
+}
+```
+
+A estrutura dos dados após aplicar a função e tratamento:
+
+```{r}
+dataset <- treatment(dataset)
+visdat::vis_dat(dataset) # problema no kaggle!
+```
+
+
+# Preparar dados
+
+Nesta seção serão desenvolvidos diferentes opções de datasets pré-processados para treino e teste utilizando principalmente os pacotes `caret` e `recipes`
+
+## Preparar recipientes 
+
+Dois recipientes serão preparados para desenvolver diferentes conjuro de treino e teste para o modelo: primeiro recipiente com transformação `YeoJojnson` e `NearZeroVar` e o segundo recipiente incluindo input de dados ausentes utilizando 3 vizinhos mais próximos.
+
+```{r}
+set.seed(1) # reprodutibilidade
+dataset_initial_split  <- initial_split(dataset, 
+                                        strata = patient_addmited_to_all,
+                                        prop = 0.9)
+
+recipe_ini <- 
+  recipe(patient_addmited_to_all ~ ., data = training(dataset_initial_split)) %>%
+  step_YeoJohnson(all_numeric()) %>% 
+  step_nzv(-all_outcomes()) 
+
+recipe_knn <- 
+  recipe_ini %>%
+  step_knnimpute(all_predictors(), neighbors = 3) 
+
+```
+
+## Preparar dados de treino e teste
+
+Primeiramente utilizar a função `bake()` para utilizar os recipientes para obter os dados pré-processados:
+
+```{r}
+train_ini <- bake(prep(recipe_ini), training(dataset_initial_split))
+train_knn <- bake(prep(recipe_knn), training(dataset_initial_split))
+```
+
+Note que existe um forte desbalanceamento nos dados :
+
+```{r}
+table(train_ini$patient_addmited_to_all)
+```
+
+Sendo assim, serão aplicados os métodos `SMOTE` e `downSample` de pré-processamento para balancear os dados:
+
+```{r}
+train_ini_down <- 
+  downSample(y = train_ini %>% pull(patient_addmited_to_all),
+             x = train_ini %>% select(-patient_addmited_to_all),
+             yname = "patient_addmited_to_all") %>% 
+  as_tibble()
+
+train_knn_down <- 
+  downSample(y = train_knn %>% pull(patient_addmited_to_all),
+             x = train_knn %>% select(-patient_addmited_to_all),
+             yname = "patient_addmited_to_all") %>% 
+  as_tibble()
+
+train_ini_smote <- 
+  SMOTE(patient_addmited_to_all ~ ., data  = as.data.frame(train_ini)) %>% 
+  as_tibble()
+
+train_knn_smote <- 
+  SMOTE(patient_addmited_to_all ~ ., data  = as.data.frame(train_knn)) %>% 
+  as_tibble()
+```
+
+Dessa forma existem 6 datasets de treino para avaliar qual o pré-processamento que melhora substancialmente a qualidade do ajuste do modelo e para isso também será necessário aplicar os recipientes nos dataset de teste:
+
+```{r}
+test_ini <- bake(prep(recipe_ini), testing(dataset_initial_split))
+test_knn <- bake(prep(recipe_knn), testing(dataset_initial_split))
+```
+
+Note que não se faz necessário criar mais datasets de test para os processos de balanceamento.
+
+# Avaliar algoritmos
+
+Nesta seção serão avaliados os resultados dos modelos ajustados para cada base de treino preparada na seção anterior
+
+## Seleção de modelos
+
+O modelo *Recursive Feature Elimination* (RFE) foi o selecionado para resolver a Task pois existe uma grande quantidade de atributos disponíveis para ajustar um modelo para prever casos de COVID-19, espera-se que um modelo com recursos para seleção de atributos tenha um bom desempenho. Além disso existe grande quantidade de dados faltantes e dados muito esparsos, o que também exige  a adoção de um modelo que não faça suposições sobre o formato dos dados.
+
+A métrica para regular a qualidade do ajuste selecionada foi a `ROC` pois a `Acuracy` não é indicada para este contexto pois existe uma preocupação é maximizar tanto a `Sens` quanto a `Spec`. Os tamanhos de amostra que serão testados serão: `r c(5, 7, 10, 15, 20, 25)`
+
+```{r}
+set.seed(10)
+
+treebagFuncs$summary <- twoClassSummary # AUC
+ctrl <- rfeControl(method = "repeatedcv",
+                   number = 5,
+                   repeats = 3,
+                   verbose = T,
+                   functions = treebagFuncs)
+
+custom_rfe <- function(x){
+  rfe(x %>% select(-patient_addmited_to_all),
+      x %>% pull(patient_addmited_to_all),
+      sizes = c(5, 7, 10, 15, 20, 25),
+      metric="ROC",
+      rfeControl = ctrl,
+      na.action = na.pass)
+}
+```
+
+Com todos os parâmetros definidos vamos aos ajustes:
+
+```{r treinando_modelos, eval = T}
+rfe_ini       <- custom_rfe(train_ini)
+rfe_ini_down  <- custom_rfe(train_ini_down)
+rfe_ini_smote <- custom_rfe(train_ini_smote)
+rfe_knn       <- custom_rfe(train_knn)
+rfe_knn_down  <- custom_rfe(train_knn_down)
+rfe_knn_smote <- custom_rfe(train_knn_smote)
+```
+
+```{r, echo = F, eval = F}
+rfe_ini       <- readRDS('backup_models/rfe_ini.rds')
+rfe_ini_down  <- readRDS('backup_models/rfe_ini_down.rds')
+rfe_ini_smote <- readRDS('backup_models/rfe_ini_smote.rds')
+rfe_knn       <- readRDS('backup_models/rfe_knn.rds')
+rfe_knn_down  <- readRDS('backup_models/rfe_knn_down.rds')
+rfe_knn_smote <- readRDS('backup_models/rfe_knn_smote.rds')
+```
+
+## Avaliar qualidade do ajuste dos modelos
+
+Confira a Curva ROC e medida AUC de cada modelo:
+
+```{r}
+to_roc <- 
+  tibble(
+    original = testing(dataset_initial_split) %>% 
+      pull(patient_addmited_to_all) %>% {if_else(. == "negative", 0, 1)}
+    ,
+    rfe_ini = predict(rfe_ini, newdata = test_ini) %>%
+      pull(pred) %>% {if_else(. == "negative", 0, 1)}
+    ,
+    rfe_ini_down = predict(rfe_ini_down, newdata = test_ini) %>%
+      pull(pred) %>% {if_else(. == "negative", 0, 1)}
+    ,
+    rfe_ini_smote = predict(rfe_ini_smote, newdata = test_ini) %>%
+      pull(pred) %>% {if_else(. == "negative", 0, 1)}
+    ,
+    rfe_knn = predict(rfe_knn, newdata = test_knn) %>%
+      pull(pred) %>% {if_else(. == "negative", 0, 1)}
+    ,
+    rfe_knn_down = predict(rfe_knn_down, newdata = test_knn) %>%
+      pull(pred) %>% {if_else(. == "negative", 0, 1)}
+    ,
+    rfe_knn_smote = predict(rfe_knn_smote, newdata = test_knn) %>%
+      pull(pred) %>% {if_else(. == "negative", 0, 1)}
+    
+  )
+
+rocobj <- pROC::roc(original ~. , data = to_roc)
+
+names(rocobj) <- 
+  map2_chr(rocobj,
+           c('rfe_ini','rfe_ini_down', 'rfe_ini_smote', 
+             'rfe_knn', 'rfe_knn_down', 'rfe_knn_smote'),
+           ~ paste0(.y, "-AUC:", round(as.numeric(auc(.x)), 4)))
+
+ggroc(rocobj, legacy.axes = T) + xlab("FPR") + ylab("TPR") + 
+  geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1), color="darkgrey", linetype="dashed")+
+  geom_abline(slope = 1, linetype = 2, alpha = .7)+
+  labs(x = "FPR: Taxa de Falso Positivo", y = "TPR: Taxa de Verdadeiro Positivo")
+
+```
+
+Note que o modelo RFE sem input de dados com balanceamento `downSample` foi o modelo que apresentou maior AUC, o que indica que ele teve o melhor desempenho baseado nessa medida resumo, dentre os modelos ajustados.
+
+Porém como trata-se de um problema envolvendo dados desbalanceados, é necessário conferir outras métricas como a sensibilidade e a especificidade do modelo. Abaixo um resumo das estatísticas dos ajustes de cada modelo:
+
+```{r}
+resamp <- resamples(list(rfe_ini = rfe_ini,
+                         rfe_ini_down = rfe_ini_down,
+                         rfe_ini_smote = rfe_ini_smote,
+                         rfe_knn = rfe_knn,
+                         rfe_knn_down = rfe_knn_down,
+                         rfe_knn_smote = rfe_knn_smote))
+bwplot(resamp)
+```
+
+Note que o pré processamento que apresentou os melhor resultados `ROC`, `Sens` e `Spec` no geral foi o RFE com input knn e ajuste SMOTE para balanceamento.
+
+## Modelo final
+
+Estes dois modelos comentados serão selecionados para uma análise mais detalhada nos dados de teste. Veja a matriz de confusão destes dois modelos nos dados de teste:
+
+  1. RFE sem input de dados faltantes com balanceamento `downSample`:
+
+Nos dados de treino:
+
+```{r}
+rfe_knn
+```
+
+Nos dados de teste:
+
+```{r}
+confusionMatrix(
+  predict(rfe_knn, newdata = test_knn) %>% pull(pred),
+  test_knn %>% pull(patient_addmited_to_all)
+)
+```
+
+  2. RFE com input de dados faltante e balanceamento `SMOTE`
+
+Nos dados de treino:
+
+```{r}
+rfe_knn_smote
+```
+
+Nos dados de teste:
+
+```{r}
+confusionMatrix(
+  predict(rfe_knn_smote, newdata = test_knn) %>% pull(pred),
+  test_knn %>% pull(patient_addmited_to_all)
+)
+```
+
+O modelo final selecionando será o 1 (RFE com input knn sem balanceamento). Veja um gráfico que exibe o melhor k para ajustar o modelo:
+
+```{r}
+ggplot(rfe_knn_smote) 
+```
+
+Por fim, os atributos selecionados para melhor prever COVID-19 segundo o modelo foram: `r predictors(rfe_knn_smote)`
+
+```{r rascunho_xgboost, eval = F, echo = F}
+ctrl <- trainControl(method = "repeatedcv",
+                     number = 5,
+                     repeats = 3,
+                     summaryFunction = twoClassSummary, # AUC
+                     classProbs = TRUE,
+                     verboseIter = T)
+
+xgb_model <- train(patient_addmited_to_all ~ .,
+                   train_knn_smote,
+                   method = 'gbm',
+                   tuneLength = 10,
+                   # tuneGrid = grid,
+                   # parms=list(split='information'),
+                   trControl = ctrl,
+                   metric = "ROC",
+                   na.action = na.pass)
+
+# resultados nos dados de treino
+confusionMatrix(xgb_model, norm = "none")
+plot(xgb_model)
+varImp(xgb_model)
+
+# matriz de confusao nos dados de teste
+confusionMatrix(
+  predict(xgb_model, newdata = test_knn),
+  test_knn %>% pull(patient_addmited_to_all)
+)
+
+# Curva roc
+to_roc <- 
+  tibble(
+    original = testing(dataset_initial_split) %>% 
+      pull(sars_cov_2_exam_result) %>% {if_else(. == "negative", 0, 1)}
+    ,
+    rfe_knn_smote = predict(rfe_knn_smote, newdata = test_knn) %>%
+      pull(pred) %>% {if_else(. == "negative", 0, 1)}
+    ,
+    xgboost_knn_smote = predict(xgb_model, newdata = test_knn) %>% 
+      {if_else(. == "negative", 0, 1)}
+  )
+
+rocobj <- pROC::roc(original ~. , data = to_roc)
+
+names(rocobj) <- 
+  map2_chr(rocobj,
+           c('rfe_knn_smote', 'xgboost_knn_smote'),
+           ~ paste0(.y, "-AUC:", round(as.numeric(auc(.x)), 4)))
+
+ggroc(rocobj, legacy.axes = T) + xlab("FPR") + ylab("TPR") + 
+  geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1), color="darkgrey", linetype="dashed")+
+  geom_abline(slope = 1, linetype = 2, alpha = .7)+
+  labs(x = "FPR: Taxa de Falso Positivo", y = "TPR: Taxa de Verdadeiro Positivo")
+
+```
+
+# Conclusão e próximos passos
+
+Neste projeto não estavam disponíveis variáveis de sintomas e muitos dados referentes a gasometria estavam faltantes. Devido ao fato que sem sintomas certos parâmetros inflamatórios se tornam inespecíficos, podendo ser referência para diversas doenças e que dados gasométricos podem inferir sintomas respiratórios e também a condição fisiológica do paciente, a falta desses é de extrema importância e poderia ajudar no ajuste do modelo melhorando-o.
+
+Além disso, ficam outras sugestões de passos futuros para melhorar a qualidade do ajuste de um modelo para estes dados:
+
+  * Aumentar número de vizinhos
+  * Testar outros métodos de balanceamento
+  * Utilizar as variáveis encontradas para ajustar novos modelos
+
+# Referências
+
+  * Valores de referências para exames de urina e sangue: <https://www.msdmanuals.com/pt-pt/profissional/ap%C3%AAndices/valores-laboratoriais-normais/exames-de-urina-valores-normais>
+  * <https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7081812/pdf/clinmed-20-2-124.pdf>
+  * <https://www.ajronline.org/doi/pdf/10.2214/AJR.20.22959>
+  * <https://www.bmj.com/content/bmj/368/bmj.m1091.full.pdf>
+  * <https://respiratory-research.biomedcentral.com/track/pdf/10.1186/s12931-020-01338-8>
+  * <https://www.ajronline.org/doi/pdf/10.2214/AJR.20.22959>

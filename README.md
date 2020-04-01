@@ -11,8 +11,8 @@ Autores e participantes do projeto:
 
 **Atenção**: Toda a documentação abaixo foi obtida e trduzida livremente da descriçã do Dataset no Kaggle: <https://www.kaggle.com/einsteindata4u/covid19>
 
-Submissão Task 1: <...>
-Submissão Task 2: <...>
+Submissão Task 1: <https://www.kaggle.com/gomes555/task1-covid-19-diagnosis>
+Submissão Task 2: <https://www.kaggle.com/gomes555/task2-covid-19-admission-ac-94-sens-0-92-auc-0-96>
 
 # Backgroud
 

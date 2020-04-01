@@ -122,7 +122,7 @@ Após obter a análise geral dos dados, será utilizado o pacote `DataExplorer` 
 ```{r, eval = F}
 # criar relatorio rapido
 create_report(janitor::clean_names(dataset), y = 'sars_cov_2_exam_result', 
-              output_file = "report.html") 
+              output_file = "report1.html") 
 ```
 
 Este relatório pode ser lido [neste link](https://github.com/gomesfellipe/cod19_kaggle_einstein/blob/master/report.html)
@@ -271,7 +271,7 @@ Dois recipientes serão preparados para desenvolver diferentes conjuro de treino
 set.seed(1) # reprodutibilidade
 dataset_initial_split  <- initial_split(dataset, 
                                         strata = sars_cov_2_exam_result,
-                                        prop = 0.9)
+                                        prop = 0.8)
 
 recipe_ini <- 
   recipe(sars_cov_2_exam_result ~ ., data = training(dataset_initial_split)) %>%
